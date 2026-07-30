@@ -17,25 +17,20 @@ import React, { useMemo, useState } from "react";
 import {
   FlatList,
   Modal,
-  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  UIManager,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useOutlet } from "../../contexts/OutletContext";
 
 // Enable smooth layout transitions for Android devices
-if (
-  Platform.OS === "android" &&
-  UIManager.setLayoutAnimationEnabledExperimental
-) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+// 🚀 FIX: Removed deprecated UIManager.setLayoutAnimationEnabledExperimental
+// This is no-op in React Native New Architecture (Fabric) and causes warnings
+// Layout animations are now handled automatically by React Native Reanimated
 
 interface Booking {
   id: string;
