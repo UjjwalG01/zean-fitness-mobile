@@ -5,32 +5,9 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useDatabase } from "../contexts/DatabaseContext";
 
 export default function () {
-  // Pure structural entrypoint. The layout guard handles all redirection.
-  const router = useRouter();
-  const { config, user, userRole, isLoading } = useDatabase();
-
-  useEffect(() => {
-    if (isLoading) return;
-
-    // 1. No property database configured -> Setup QR Screen
-    if (!config) {
-      router.replace("/setup");
-      return;
-    }
-
-    // 2. Database configured but user not logged in -> Auth Screen
-    if (!user) {
-      router.replace("/(auth)/login");
-      return;
-    }
-
-    // 3. User authenticated -> Route by role
-    if (userRole === "staff") {
-      router.replace("/(staff)");
-    } else {
-      router.replace("/(client)");
-    }
-  }, [isLoading, config, user, userRole]);
+  // 🚀 FIX: Pure structural entrypoint. ALL redirection handled by _layout.tsx guard.
+  // This file should ONLY display a loading screen, never perform navigation.
+  const { isLoading } = useDatabase();
 
   return (
     <View style={styles.loadingContainer}>

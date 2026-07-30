@@ -94,11 +94,17 @@ function AppGuardLayout() {
       return;
     }
 
-    // LAYER 6: Cross-boundary protection
+    // 🚀 FIX LAYER 6: Add explicit guard to prevent redundant cross-boundary redirects
+    // Only redirect if user is actually on the WRONG dashboard
     if (isStaff && inClientGroup) {
-      router.replace("/(staff)");
+      // Verify they're not already being redirected
+      if (segments.length <= 1 || segments[1] !== "index") {
+        router.replace("/(staff)");
+      }
     } else if (!isStaff && inStaffGroup) {
-      router.replace("/(client)");
+      if (segments.length <= 1 || segments[1] !== "index") {
+        router.replace("/(client)");
+      }
     }
   }, [
     isConfigured,
@@ -107,6 +113,7 @@ function AppGuardLayout() {
     dbUserRole,
     isLoading,
     segments,
+    router, // 🚀 FIX: Add router to dependencies for stability
   ]);
 
   if (isLoading) {

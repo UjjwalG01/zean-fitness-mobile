@@ -1,5 +1,5 @@
 import Skeleton from "@/components/Skeleton";
-import { supabaseRead } from "@/libs/supabase";
+import { useDatabase } from "@/contexts/DatabaseContext";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
@@ -11,22 +11,43 @@ interface TransactionRecord {
   method: string;
   status: string;
   member_name: string;
+  outlet_id?: string | null;
 }
 
 export default function LedgerScreen() {
-  const { data: transactions, isLoading } = useQuery<TransactionRecord[]>({
-    queryKey: ["live-transactions-ledger"],
-    queryFn: async () => {
-      const { data, error } = await supabaseRead
-        .from("transactions")
-        .select("id, member_name, created_at, total, method, status")
-        .order("created_at", { ascending: false })
-        .limit(50); // FIXED: Safety cap prevents mobile memory layout crashes
+  // 🚀 FIX: Get authenticated clients and user from context
+  const { supabaseRead, config, activeUser } = useDatabase();
+  
+  // Determine if user is admin/owner to bypass outlet filtering
+  const staffRole = (activeUser as any)?.role || "";
+  const isAdmin = ["admin", "owner", "superadmin", "manager"].includes(
+    String(staffRole).toLowerCase()
+  );
+  const staffOutletId = (activeUser as any)?.outlet_id;
 
-      // FIXED: Unhandled Supabase errors will now correctly bubble up to TanStack Query
+  const { data: transactions, isLoading } = useQuery<TransactionRecord[]>({
+    // 🚀 FIX: Dynamic query key including property URL
+    queryKey: ["live-transactions-ledger", config?.supabaseUrl, staffOutletId],
+    queryFn: async () => {
+      if (!supabaseRead) throw new Error("No database connection");
+
+      let query = supabaseRead
+        .from("transactions")
+        .select("id, member_name, created_at, total, method, status, outlet_id")
+        .order("created_at", { ascending: false })
+        .limit(50); // Safety cap prevents mobile memory layout crashes
+
+      // 🚀 FIX: Flexible outlet scoping for non-admin users
+      if (!isAdmin && staffOutletId) {
+        query = query.eq("outlet_id", String(staffOutletId));
+      }
+
+      const { data, error } = await query;
+
+      // Unhandled Supabase errors will now correctly bubble up to TanStack Query
       if (error) throw error;
 
-      // FIXED: Maps and flattens nested relational data structures seamlessly for your list
+      // Maps and flattates nested relational data structures seamlessly for your list
       const formattedRecords: TransactionRecord[] = (data || []).map(
         (row: any) => ({
           id: row.id,
@@ -34,6 +55,7 @@ export default function LedgerScreen() {
           total: row.total,
           method: row.method,
           status: row.status,
+          outlet_id: row.outlet_id,
           // Fallback handles both flat column setups or relational joins smoothly:
           member_name:
             row.member_name || row.members?.full_name || "Unknown Member",
@@ -42,6 +64,8 @@ export default function LedgerScreen() {
 
       return formattedRecords;
     },
+    // 🚀 FIX: Only run query when client and config are ready
+    enabled: !!supabaseRead && !!config?.supabaseUrl,
   });
 
   if (isLoading) {

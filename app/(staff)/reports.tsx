@@ -1,5 +1,5 @@
 import Skeleton from "@/components/Skeleton";
-import { supabase, supabaseRead } from "@/libs/supabase";
+import { useDatabase } from "@/contexts/DatabaseContext";
 import {
   getSystemMonthStr,
   getSystemTodayStr,
@@ -31,29 +31,56 @@ interface AdminAnalyticsSummary {
 }
 
 export default function ReportsScreen() {
+  // 🚀 FIX: Get authenticated clients and user from context
+  const { supabase, supabaseRead, config, activeUser } = useDatabase();
+  
   const currentMonth = getSystemMonthStr(); // e.g. "2026-07"
   const todayStr = getSystemTodayStr(); // e.g. "2026-07-04"
   const [refreshing, setRefreshing] = useState(false);
+
+  // Determine if user is admin/owner to bypass outlet filtering
+  const staffRole = (activeUser as any)?.role || "";
+  const isAdmin = ["admin", "owner", "superadmin", "manager"].includes(
+    String(staffRole).toLowerCase()
+  );
+  const staffOutletId = (activeUser as any)?.outlet_id;
 
   const {
     data: summary,
     isLoading,
     refetch,
   } = useQuery<AdminAnalyticsSummary>({
-    queryKey: ["admin-property-analytics", todayStr, currentMonth],
+    // 🚀 FIX: Dynamic query key including property URL
+    queryKey: ["admin-property-analytics", config?.supabaseUrl, todayStr, currentMonth],
     queryFn: async () => {
+      if (!supabaseRead || !supabase) throw new Error("No database connection");
+
       // 1. Total Registered Members count (Global Property Headcount)
-      const { count: memberCount, error: memberErr } = await supabaseRead
+      let membersQuery = supabaseRead
         .from("members")
         .select("*", { count: "exact", head: true });
+      
+      // 🚀 FIX: Flexible outlet scoping for non-admin users
+      if (!isAdmin && staffOutletId) {
+        membersQuery = membersQuery.eq("outlet_id", String(staffOutletId));
+      }
+      
+      const { count: memberCount, error: memberErr } = await membersQuery;
       if (memberErr) throw memberErr;
 
       // 2. MTD Property Revenue Aggregation (All completed payments this month)
-      const { data: revenueData, error: revErr } = await supabase
+      let revenueQuery = supabase
         .from("transactions")
         .select("total")
         .eq("status", "completed")
         .gte("created_at", `${currentMonth}-01T00:00:00`);
+      
+      // 🚀 FIX: Flexible outlet scoping for non-admin users
+      if (!isAdmin && staffOutletId) {
+        revenueQuery = revenueQuery.eq("outlet_id", String(staffOutletId));
+      }
+      
+      const { data: revenueData, error: revErr } = await revenueQuery;
       if (revErr) throw revErr;
 
       const revenueSum = (revenueData || []).reduce(
@@ -62,17 +89,31 @@ export default function ReportsScreen() {
       );
 
       // 3. Total Property Bookings Made
-      const { count: bookingCount, error: bookErr } = await supabase
+      let bookingsQuery = supabase
         .from("bookings")
         .select("*", { count: "exact", head: true })
-        .eq("status", "confirmed"); // Counts all active/confirmed schedule spots reserved
+        .eq("status", "confirmed");
+      
+      // 🚀 FIX: Flexible outlet scoping for non-admin users
+      if (!isAdmin && staffOutletId) {
+        bookingsQuery = bookingsQuery.eq("outlet_id", String(staffOutletId));
+      }
+      
+      const { count: bookingCount, error: bookErr } = await bookingsQuery;
       if (bookErr) throw bookErr;
 
       // 4. Today's Total Verified Property Check-Ins
-      const { count: checkInCount, error: checkErr } = await supabase
+      let checkInsQuery = supabase
         .from("check_ins")
         .select("*", { count: "exact", head: true })
         .eq("check_in_date", todayStr);
+      
+      // 🚀 FIX: Flexible outlet scoping for non-admin users
+      if (!isAdmin && staffOutletId) {
+        checkInsQuery = checkInsQuery.eq("outlet_id", String(staffOutletId));
+      }
+      
+      const { count: checkInCount, error: checkErr } = await checkInsQuery;
       // .eq("status", "verified");
       if (checkErr) throw checkErr;
 
@@ -83,6 +124,8 @@ export default function ReportsScreen() {
         todayCheckIns: checkInCount || 0,
       };
     },
+    // 🚀 FIX: Only run query when clients and config are ready
+    enabled: !!supabaseRead && !!supabase && !!config?.supabaseUrl,
   });
 
   const onRefresh = useCallback(async () => {

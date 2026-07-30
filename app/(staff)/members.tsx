@@ -1,5 +1,5 @@
 import Skeleton from "@/components/Skeleton";
-import { supabase, supabaseRead } from "@/libs/supabase";
+import { useDatabase } from "@/contexts/DatabaseContext";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Shield, ShieldAlert, UserCheck, Users } from "lucide-react-native";
 import React from "react";
@@ -20,27 +20,48 @@ interface MemberProfile {
   status: "active" | "inactive" | string;
   member_code: string | null;
   role: "admin" | "staff" | "manager" | "member" | null;
+  outlet_id?: string | null;
 }
 
 export default function MembersScreen() {
-  // Live query pulling directly from the 'members' ledger table
+  // 🚀 FIX: Get authenticated clients and user from context instead of static imports
+  const { supabase, supabaseRead, config, activeUser } = useDatabase();
   const queryClient = useQueryClient();
+
+  // Determine if user is admin/owner to bypass outlet filtering
+  const staffRole = (activeUser as any)?.role || "";
+  const isAdmin = ["admin", "owner", "superadmin", "manager"].includes(
+    String(staffRole).toLowerCase()
+  );
+  const staffOutletId = (activeUser as any)?.outlet_id;
 
   const {
     data: members,
     isLoading,
     refetch,
   } = useQuery<MemberProfile[]>({
-    queryKey: ["live-production-members-list"],
+    // 🚀 FIX: Dynamic query key including property URL and user context
+    queryKey: ["staff-members", config?.supabaseUrl, staffOutletId, isAdmin],
     queryFn: async () => {
-      const { data, error } = await supabaseRead
+      if (!supabaseRead) throw new Error("No database connection");
+
+      let query = supabaseRead
         .from("members")
-        .select("id, full_name, email, tier, status, member_code, role")
-        .order("full_name", { ascending: true });
+        .select("id, full_name, email, tier, status, member_code, role, outlet_id");
+
+      // 🚀 FIX: Flexible outlet scoping - admins see all, staff see only their outlet
+      if (!isAdmin && staffOutletId) {
+        query = query.eq("outlet_id", String(staffOutletId));
+      }
+
+      const { data, error } = await query.order("full_name", { ascending: true });
 
       if (error) throw error;
       return data || [];
     },
+    // 🚀 FIX: Only run query when client and config are ready
+    enabled: !!supabaseRead && !!config?.supabaseUrl,
+    staleTime: 0, // Always refetch on mount for fresh data
   });
 
   // WRITE OPERATION: Always explicitly routed to the primary master database node
@@ -52,6 +73,7 @@ export default function MembersScreen() {
       id: string;
       currentStatus: string;
     }) => {
+      if (!supabase) throw new Error("No database connection");
       const nextStatus = currentStatus === "active" ? "inactive" : "active";
       const { data, error } = await supabase
         .from("members")
@@ -63,9 +85,9 @@ export default function MembersScreen() {
       return data;
     },
     onSuccess: () => {
-      // Invalidate the read list to pull fresh data
+      // 🚀 FIX: Invalidate with matching dynamic query key
       queryClient.invalidateQueries({
-        queryKey: ["live-production-members-list"],
+        queryKey: ["staff-members", config?.supabaseUrl, staffOutletId, isAdmin],
       });
     },
     onError: (err: any) => {

@@ -64,9 +64,33 @@ export function createDynamicSupabaseClient(
 
     const supabaseRead = createClient(replicaUrl, anonKey, {
         auth: {
-            persistSession: false,
-            autoRefreshToken: false,
+            // 🚀 CRITICAL FIX: Must persist session to attach Authorization headers to GET requests
+            storage: MobileSecureStoreAdapter, // Use same secure storage adapter
+            persistSession: true, 
+            autoRefreshToken: false, // Read client doesn't need to refresh tokens, primary does
+            detectSessionInUrl: false,
         },
+    });
+
+    // 🚀 CRITICAL FIX: Immediately sync the current session from Primary -> Read Client
+    // This ensures that if a user is already logged in, the read client inherits the token instantly
+    supabase.auth.getSession().then(({  { session } }) => {
+        if (session && supabaseRead) {
+            supabaseRead.auth.setSession({
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+            });
+        }
+    });
+
+    // Optional: Listen for future token changes to keep them in sync
+    supabase.auth.onAuthStateChange(async (event, session) => {
+        if (session && supabaseRead) {
+            await supabaseRead.auth.setSession({
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+            });
+        }
     });
 
     return { supabase, supabaseRead };

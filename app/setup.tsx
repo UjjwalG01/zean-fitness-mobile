@@ -12,7 +12,7 @@ import { PropertyConfig } from "../services/configStorage";
 export default function SetupScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanning, setScanning] = useState(true);
-  const { setupProperty } = useDatabase();
+  const { setupProperty, resetProperty } = useDatabase();
   const router = useRouter();
   const queryClient = useQueryClient();
 
@@ -38,25 +38,31 @@ export default function SetupScreen() {
         throw new Error("Invalid setup QR format");
       }
 
-      // 1. Clear all in-memory React Query cached data from old DB
-      queryClient.clear();
-
-      // 2. Clear old member session from SecureStore
-      await SecureStore.deleteItemAsync("vitafit_member_session");
-
+      // 🚀 FIX: Delegate ALL clearing logic to setupProperty to avoid race conditions
+      // Remove local queryClient.clear() and SecureStore.deleteItemAsync() calls here
+      // The setupProperty function in DatabaseContext handles everything atomically
+      
       // 3. Re-initialize Supabase client with new property credentials
       await setupProperty(payload);
 
-      Alert.alert(
-        "Property Switched",
-        `Successfully connected to ${payload.propertyName || "New Property"}. Please log in with your credentials for this location.`,
-        [
-          {
-            text: "Continue to Login",
-            onPress: () => router.replace("/(auth)/login"),
-          },
-        ],
-      );
+      // 🚀 FIX: Use setTimeout to ensure state updates propagate before navigation
+      // This prevents the Alert from being dismissed by state changes
+      setTimeout(() => {
+        Alert.alert(
+          "Property Switched",
+          `Successfully connected to ${payload.propertyName || "New Property"}. Please log in with your credentials for this location.`,
+          [
+            {
+              text: "Continue to Login",
+              onPress: () => {
+                // 🚀 FIX: Dismiss all stacked routes and replace with login
+                router.dismissAll();
+                router.replace("/(auth)/login");
+              },
+            },
+          ],
+        );
+      }, 100);
     } catch (e) {
       Alert.alert(
         "Scan Failed",
