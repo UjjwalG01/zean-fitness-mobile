@@ -55,6 +55,7 @@ The **Zean Fitness Mobile App** (VitaFit Club Manager) is a multi-tenant React N
 └── supabase/
     └── functions/
         └── create-member-jwt/      # Edge Function for member custom JWT issuance
+
 ```
 
 ---
@@ -87,10 +88,10 @@ The authentication layer (`app/(auth)/login.tsx`) automatically detects whether 
                ┌─────────────────────────────┴─────────────────────────────┐
                ▼                                                           ▼
   [PATH 1: STAFF AUTHENTICATION]                             [PATH 2: MEMBER / CLIENT AUTH]
-  • Supabase Native Auth (`signInWithPassword`)              • Lookup in `members` table by email & `member_code`
-  • Verify role in `app_users` table                        • Invoke Edge Function: `create-member-jwt`
+  • Supabase Native Auth (`signInWithPassword`)              	• Lookup in `members` table by email & `member_code`
+  • Verify role in `app_users` table                        	• Invoke Edge Function: `create-member-jwt`
   • Roles: admin, manager, staff, owner                      • Write token to `SecureStore` via `setMemberSession`
-  • Route: `router.replace("/(staff)")`                      • Decode JWT claims & assign `userRole = "client"`
+  • Route: `router.replace("/(staff)")`                      	• Decode JWT claims & assign `userRole = "client"`
                                                              • Route: `router.replace("/(client)")`
 
 ```
@@ -133,17 +134,17 @@ The authentication layer (`app/(auth)/login.tsx`) automatically detects whether 
 
 ## Context API Reference (`useDatabase`)
 
-| Function / Value         | Type            | Description                                                                                 |
-| ------------------------ | --------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------- |
-| `supabase`               | `SupabaseClient | null`                                                                                       | Dynamic primary Supabase client instance.             |
-| `supabaseRead`           | `SupabaseClient | null`                                                                                       | Read-optimized Supabase client instance.              |
-| `user`                   | `User           | AuthUser                                                                                    | null`                                                 | Active authenticated user or member payload.        |
-| `userRole`               | `"staff"        | "client"                                                                                    | null`                                                 | Current permission level used by navigation guards. |
-| `config`                 | `PropertyConfig | null`                                                                                       | Currently paired property metadata (URL, keys, name). |
-| `setupProperty(config)`  | `Function`      | Pairs device to a new property, purges old sessions/caches, and updates state.              |
-| `resetProperty()`        | `Function`      | Unlinks property, clears storage, resets query cache, and routes to `/setup`.               |
-| `setMemberSession(data)` | `Function`      | Saves member JWT payload to `SecureStore` and updates context state immediately.            |
-| `logout()`               | `Function`      | Signs out of Supabase, deletes stored member session, clears query cache, and resets state. |
+| Function / Value         | Type                      | Description                                                                                 |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------- |
+| `supabase`               | `SupabaseClient` `null`   | Dynamic primary Supabase client instance.                                                   |
+| `supabaseRead`           | `SupabaseClient` `null`   | Read-optimized Supabase client instance.                                                    |
+| `user`                   | `User` `AuthUser` `null`  | Active authenticated user or member payload.                                                |
+| `userRole`               | `"staff" "client"` `null` | Current permission level used by navigation guards.                                         |
+| `config`                 | `PropertyConfig` `null`   | Currently paired property metadata (URL, keys, name).                                       |
+| `setupProperty(config)`  | `Function`                | Pairs device to a new property, purges old sessions/caches, and updates state.              |
+| `resetProperty()`        | `Function`                | Unlinks property, clears storage, resets query cache, and routes to `/setup`.               |
+| `setMemberSession(data)` | `Function`                | Saves member JWT payload to `SecureStore` and updates context state immediately.            |
+| `logout()`               | `Function`                | Signs out of Supabase, deletes stored member session, clears query cache, and resets state. |
 
 ---
 
@@ -151,21 +152,12 @@ The authentication layer (`app/(auth)/login.tsx`) automatically detects whether 
 
 1. **Install Dependencies**:
 
-```bash
-npm install
-
-```
-
+`````bash
+npm install````
 2. **Start Development Server**:
-
-```bash
-npx expo start
-
-```
+````bash
+npx expo start````
 
 3. **Pair Property**:
    On launch, scan a valid property configuration QR code containing `supabaseUrl` and `supabasePublishableKey`. To switch properties later, click **Switch** on the login screen or navigate to settings.
-
-```
-
-```
+`````
