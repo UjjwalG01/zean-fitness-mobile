@@ -264,15 +264,26 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const setupProperty = async (newConfig: PropertyConfig) => {
     setIsLoading(true);
-    queryClient.clear(); // 💥 Purge cached queries from old database
-
+    
     try {
-      // 1. Purge old session state AND local member storage
+      // 🚀 FIX 1: Purge old session state AND local member storage FIRST (order matters)
       setUser(null);
       setUserRole(null);
       cleanupListeners();
-      await SecureStore.deleteItemAsync("vitafit_member_session");
+      
+      // 🚀 FIX 2: Delete ALL secure storage keys atomically BEFORE clearing query cache
+      await Promise.all([
+        SecureStore.deleteItemAsync("vitafit_member_session"),
+        SecureStore.deleteItemAsync("biometrics_enabled"),
+        SecureStore.deleteItemAsync("biometric_email"),
+        SecureStore.deleteItemAsync("biometric_secret"),
+      ]);
+      
+      // 🚀 FIX 3: Cancel all ongoing queries to prevent stale data writes, THEN clear
+      queryClient.cancelQueries();
+      queryClient.clear();
 
+      // 🚀 FIX 4: Sign out from old Supabase client before disposal
       try {
         if (supabase) {
           await supabase.auth.signOut();
@@ -281,7 +292,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         console.warn("Cleaned old auth state:", e);
       }
 
-      // 2. Persist newly scanned config to storage
+      // 5. Persist newly scanned config to storage
       await savePropertyConfig(newConfig);
       setConfig(newConfig);
 
@@ -294,30 +305,22 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // 3. Create fresh client instances
+      // 6. Create fresh client instances
       const { supabase: primaryClient, supabaseRead: readClient } =
         createDynamicSupabaseClient(newConfig.supabaseUrl, apiKey);
 
       setSupabase(primaryClient);
       setSupabaseRead(readClient);
 
-      // 4. Bind listeners to the new primary client
+      // 7. Bind listeners to the new primary client
       bindClientListeners(primaryClient);
 
-      // 5. Session check protected with timeout guard
-      try {
-        await Promise.race([
-          checkSession(primaryClient),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Session check timeout")), 3000),
-          ),
-        ]);
-      } catch (sessionErr) {
-        console.warn(
-          "⚠️ Session check skipped during new property pairing:",
-          sessionErr,
-        );
-      }
+      // 8. Session check protected with timeout guard - but DO NOT auto-login
+      // After property switch, we ALWAYS want user to log in fresh
+      // So we explicitly skip session restoration and ensure clean state
+      setUser(null);
+      setUserRole(null);
+      
     } catch (err) {
       console.error("❌ Failed to setup property:", err);
       throw err;
@@ -328,21 +331,47 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const resetProperty = async () => {
     setIsLoading(true);
-    queryClient.clear();
-    cleanupListeners();
-    await SecureStore.deleteItemAsync("vitafit_member_session");
-    if (supabase) {
-      try {
-        await supabase.auth.signOut();
-      } catch {}
+    
+    // 🚀 FIX: Atomic purge sequence - order matters for complete cleanup
+    try {
+      // 1. Cancel all pending queries first to prevent stale writes
+      queryClient.cancelQueries();
+      
+      // 2. Clear query cache completely
+      queryClient.clear();
+      
+      // 3. Cleanup all listeners
+      cleanupListeners();
+      
+      // 4. Delete ALL secure storage keys atomically
+      await Promise.all([
+        SecureStore.deleteItemAsync("vitafit_member_session"),
+        SecureStore.deleteItemAsync("biometrics_enabled"),
+        SecureStore.deleteItemAsync("biometric_email"),
+        SecureStore.deleteItemAsync("biometric_secret"),
+      ]);
+      
+      // 5. Sign out from Supabase
+      if (supabase) {
+        try {
+          await supabase.auth.signOut();
+        } catch {}
+      }
+      
+      // 6. Clear config storage
+      await clearPropertyConfig();
+      
+      // 7. Reset React state
+      setConfig(null);
+      setSupabase(null);
+      setSupabaseRead(null);
+      setUser(null);
+      setUserRole(null);
+    } catch (err) {
+      console.error("Error during property reset:", err);
+    } finally {
+      setIsLoading(false);
     }
-    await clearPropertyConfig();
-    setConfig(null);
-    setSupabase(null);
-    setSupabaseRead(null);
-    setUser(null);
-    setUserRole(null);
-    setIsLoading(false);
   };
 
   const refreshAuth = async () => {
