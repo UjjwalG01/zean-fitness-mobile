@@ -1,4 +1,3 @@
-````markdown
 # Zean Fitness Mobile App — Architecture & Development Log
 
 ## Project Overview
@@ -57,7 +56,6 @@ The **Zean Fitness Mobile App** (VitaFit Club Manager) is a multi-tenant React N
     └── functions/
         └── create-member-jwt/      # Edge Function for member custom JWT issuance
 ```
-````
 
 ---
 
