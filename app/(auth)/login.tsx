@@ -1,7 +1,5 @@
 // app/(auth)/login.tsx
-import { tryBiometricAutoLogin } from "@/components/BiometricSetup";
 import { useFocusEffect, useRouter } from "expo-router";
-import * as SecureStore from "expo-secure-store";
 import {
   Building2,
   Eye,
@@ -12,7 +10,7 @@ import {
   RefreshCw,
   Shield,
 } from "lucide-react-native";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -30,11 +28,15 @@ import Toast from "react-native-toast-message";
 import { useDatabase } from "../../contexts/DatabaseContext";
 import { useAuth } from "../../hooks/useAuth";
 
+import { MemberBiometricService } from "@/services/memberBiometricService";
+
 export default function LoginScreen() {
   const router = useRouter();
   const { config, resetProperty, supabase, supabaseRead, setMemberSession } =
     useDatabase();
   const { refetchSession } = useAuth();
+  const isAuthenticatingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const [email, setEmail] = useState("");
   const [passwordOrCode, setPasswordOrCode] = useState("");
@@ -43,6 +45,7 @@ export default function LoginScreen() {
 
   const propertyName = config?.propertyName || "Default Property";
   const [hasBiometricRecord, setHasBiometricRecord] = useState(false);
+  const [hasPromptedBio, setHasPromptedBio] = useState(false);
 
   // Field-level error state
   const [emailError, setEmailError] = useState("");
@@ -92,18 +95,29 @@ export default function LoginScreen() {
     return valid;
   };
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       let isMounted = true;
 
       async function checkAndTriggerBiometrics() {
+        // Prevent triggering if Supabase isn't ready or if already prompted
+        if (!supabase || hasPromptedBio || isAuthenticatingRef.current) return;
         try {
           const isEnabled =
-            await SecureStore.getItemAsync("biometrics_enabled");
-          if (isEnabled === "true" && isMounted) {
+            await MemberBiometricService.isMemberBiometricsEnabled();
+          if (!isMounted) return;
+
+          if (isEnabled) {
             setHasBiometricRecord(true);
             await executeBiometricBypass();
-          } else if (isMounted) {
+          } else {
             setHasBiometricRecord(false);
           }
         } catch (err) {
@@ -115,14 +129,49 @@ export default function LoginScreen() {
       return () => {
         isMounted = false;
       };
-    }, []),
+    }, [supabase, hasPromptedBio]),
   );
 
   const executeBiometricBypass = async () => {
-    await tryBiometricAutoLogin(async () => {
-      if (refetchSession) await refetchSession();
-      router.replace("/(client)");
-    });
+    if (!supabase || isAuthenticatingRef.current) return;
+
+    isAuthenticatingRef.current = true;
+    setHasPromptedBio(true);
+
+    try {
+      // Step 1: Prompt fingerprint & exchange stored refresh token with Supabase
+      const result =
+        await MemberBiometricService.authenticateMemberWithBiometrics(supabase);
+
+      if (!isMountedRef.current) return;
+
+      if (result.success) {
+        // Step 2: Refetch session context if needed & route to client dashboard
+        if (refetchSession) await refetchSession();
+        router.replace("/(client)");
+      } else {
+        // Handle actual auth errors (e.g., token expired on server)
+        // Ignores user cancels ("Biometric prompt cancelled or failed")
+        if (
+          result.error &&
+          result.error !== "Biometric prompt cancelled or failed"
+        ) {
+          Alert.alert("Biometric Auth Failed", result.error);
+        }
+      }
+    } catch (err) {
+      console.error("[Login] Biometric bypass exception:", err);
+    } finally {
+      isAuthenticatingRef.current = false;
+    }
+  };
+
+  const handleManualBiometricPress = () => {
+    // 1. Reset the guard so manual taps always trigger the OS prompt
+    setHasPromptedBio(false);
+
+    // 2. Trigger the token-based biometric exchange
+    executeBiometricBypass();
   };
 
   // Dual-path authentication logic
@@ -155,6 +204,8 @@ export default function LoginScreen() {
         password: secretKeyInput,
       });
 
+      if (!isMountedRef.current) return; // Guard against unmounted state
+
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(
           () =>
@@ -171,6 +222,14 @@ export default function LoginScreen() {
         authPromise,
         timeoutPromise,
       ])) as Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>;
+
+      if (authData?.session) {
+        // Dismiss backstack to prevent back-button navigation back to login
+        if (router.canDismiss()) {
+          router.dismissAll();
+        }
+        router.replace("/(staff)");
+      }
 
       if (authError) {
         console.log(
@@ -489,9 +548,13 @@ export default function LoginScreen() {
             {/* Biometric Button */}
             {hasBiometricRecord && (
               <TouchableOpacity
-                style={styles.biometricTriggerRow}
-                onPress={executeBiometricBypass}
+                style={[
+                  styles.biometricTriggerRow,
+                  isAuthenticatingRef.current && { opacity: 0.5 },
+                ]}
+                onPress={handleManualBiometricPress}
                 activeOpacity={0.7}
+                disabled={isAuthenticatingRef.current}
               >
                 <Fingerprint size={18} color="#60a5fa" />
                 <Text style={styles.biometricTriggerText}>

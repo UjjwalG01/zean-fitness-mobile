@@ -1,4 +1,5 @@
 // app/(client)/_layout.tsx
+import { MemberAcitvity } from "@/components/MemberActivity";
 import { Stack } from "expo-router";
 import React from "react";
 
@@ -23,6 +24,7 @@ export default function ClientLayout() {
         name="index"
         options={{
           title: "Dashboard",
+          headerRight: MemberAcitvity,
         }}
       />
 

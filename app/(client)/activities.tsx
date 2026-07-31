@@ -64,6 +64,10 @@ export default function ActivitiesScreen() {
     const title = item.service_name || item.class_name || "Fitness Session";
     const category = item.service_type || "Club Service";
 
+    const isActiveMembership =
+      item.service_type?.toLowerCase() === "membership" &&
+      item.status === "pending";
+
     return (
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -72,16 +76,26 @@ export default function ActivitiesScreen() {
           <View
             style={[
               styles.statusBadge,
-              { backgroundColor: getStatusColor(item.status) + "20" },
+              {
+                backgroundColor: isActiveMembership
+                  ? "#3b82f6"
+                  : getStatusColor(item.status) + "20",
+              },
             ]}
           >
             <Text
               style={[
                 styles.statusText,
-                { color: getStatusColor(item.status) },
+                {
+                  color: isActiveMembership
+                    ? "white"
+                    : getStatusColor(item.status),
+                },
               ]}
             >
-              {item.status}
+              {isActiveMembership
+                ? "Active Membership"
+                : item.status.toUpperCase()}
             </Text>
           </View>
         </View>
@@ -211,7 +225,7 @@ const styles = StyleSheet.create({
   dateText: { color: "#3b82f6", fontSize: 13, fontWeight: "600" },
   rateText: { color: "#10b981", fontSize: 13, fontWeight: "bold" },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  statusText: { fontSize: 11, fontWeight: "bold" },
+  statusText: { fontSize: 10, fontWeight: "bold" },
   emptyState: {
     flex: 1,
     justifyContent: "center",

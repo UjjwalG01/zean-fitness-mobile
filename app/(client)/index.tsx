@@ -11,7 +11,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
@@ -105,7 +104,7 @@ export default function ClientDashboard() {
         <View style={styles.cardHeader}>
           <View style={styles.brandRow}>
             <Sparkles size={18} color="#60a5fa" />
-            <Text style={styles.brandText}>VITAFIT DIGITAL PASS</Text>
+            <Text style={styles.brandText}>ZEANFIT DIGITAL PASS</Text>
           </View>
           <View style={styles.statusBadge}>
             <Text style={styles.statusText}>
@@ -171,17 +170,10 @@ export default function ClientDashboard() {
       </View>
 
       {/* My Activity Page */}
-      <View style={styles.actionBtn}>
-        <TouchableOpacity
-          style={styles.activityBtn}
-          onPress={() => router.push("/(client)/activities")} // 👈 Replace with your actual file path in app/
-        >
-          <Text style={styles.actionText}>My Activity</Text>
-        </TouchableOpacity>
-      </View>
+      {/* <MemberAcitvity /> */}
 
       {/* Biometric Setup Integration */}
-      <BiometricSetup currentUserEmail={member.email || user?.email || ""} />
+      <BiometricSetup />
 
       {/* Logout button here */}
       <HeaderLogoutButton />
@@ -295,6 +287,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#1f2937",
     marginVertical: 6,
+    marginBottom: 18,
   },
   detailRow: {
     flexDirection: "row",
