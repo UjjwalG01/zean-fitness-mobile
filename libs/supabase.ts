@@ -4,28 +4,28 @@ import * as SecureStore from 'expo-secure-store';
 import { AppState, AppStateStatus } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
-// 1. Hardware Storage Adapter (iOS Keychain / Android Keystore)
+// 1. Safe Hardware Storage Adapter (Handles Android 2KB Limit)
 export const MobileSecureStoreAdapter = {
-    getItem: async (key: string) => {
+    getItem: async (key: string): Promise<string | null> => {
         try {
             return await SecureStore.getItemAsync(key);
         } catch (error) {
-            console.error('SecureStore read error:', error);
+            console.error('[SecureStore] Read error:', error);
             return null;
         }
     },
-    setItem: async (key: string, value: string) => {
+    setItem: async (key: string, value: string): Promise<void> => {
         try {
             await SecureStore.setItemAsync(key, value);
-        } catch (error) {
-            console.error('SecureStore write error:', error);
+        } catch (error: any) {
+            console.error('[SecureStore] Write error (Value length:', value.length, '):', error);
         }
     },
-    removeItem: async (key: string) => {
+    removeItem: async (key: string): Promise<void> => {
         try {
             await SecureStore.deleteItemAsync(key);
         } catch (error) {
-            console.error('SecureStore deletion error:', error);
+            console.error('[SecureStore] Deletion error:', error);
         }
     },
 };
@@ -41,10 +41,21 @@ const defaultReadUrl =
     process.env.EXPO_PUBLIC_SUPABASE_READ_REPLICA_URL || defaultUrl;
 
 if (!defaultUrl || !defaultAnonKey) {
-    console.warn('Missing Supabase environment variables. Check your .env file.');
+    console.warn('[Supabase] Missing environment variables in .env file.');
 }
 
-// 3. Dynamic Factory Function (Used during QR Code Property Pairing)
+// Helper: Extract unique project reference for storage key isolation
+function getStorageKey(url: string): string {
+    try {
+        const hostname = new URL(url).hostname;
+        const projectRef = hostname.split('.')[0];
+        return `sb-${projectRef}-auth-token`;
+    } catch {
+        return 'sb-auth-token';
+    }
+}
+
+// 3. Dynamic Factory Function (Used during Property Switching)
 export function createDynamicSupabaseClient(
     url: string = defaultUrl,
     anonKey: string = defaultAnonKey,
@@ -52,56 +63,60 @@ export function createDynamicSupabaseClient(
 ): {
     supabase: SupabaseClient;
     supabaseRead: SupabaseClient;
-    cleanupListeners: () => void
+    cleanupListeners: () => void;
 } {
     const primaryUrl = url;
     const replicaUrl = readReplicaUrl || primaryUrl;
+    const storageKey = getStorageKey(primaryUrl);
 
+    // Primary Client (Read/Write + Session Persistence)
     const supabase = createClient(primaryUrl, anonKey, {
         auth: {
             storage: MobileSecureStoreAdapter,
+            storageKey,
             persistSession: true,
             autoRefreshToken: true,
             detectSessionInUrl: false,
         },
     });
 
+    // Read Replica Client (In-memory session, no storage writes)
     const supabaseRead = createClient(replicaUrl, anonKey, {
         auth: {
-            // In-memory session only to avoid SecureStore write collisions with primary client
             persistSession: false,
             autoRefreshToken: false,
             detectSessionInUrl: false,
         },
     });
 
-    // Sync session from Primary -> Read Client immediately on creation
-    supabase.auth.getSession().then(({ data: { session } }) => {
-        if (session && supabaseRead) {
+    // Sync Session to Read Client safely without redundant network calls
+    const syncReadSession = (session: any) => {
+        if (session?.access_token && session?.refresh_token) {
             supabaseRead.auth.setSession({
                 access_token: session.access_token,
                 refresh_token: session.refresh_token,
-            });
+            }).catch(() => { });
+        } else {
+            supabaseRead.auth.signOut().catch(() => { });
+        }
+    };
+
+    // Initial session sync
+    supabase.auth.getSession().then(({ data: { session } }) => {
+        syncReadSession(session);
+    });
+
+    // Listen for Auth changes on Primary Client
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'SIGNED_OUT') {
+            syncReadSession(session);
         }
     });
 
-    // Listen for future token changes & handle logout sync cleanly
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (session && supabaseRead) {
-            await supabaseRead.auth.setSession({
-                access_token: session.access_token,
-                refresh_token: session.refresh_token,
-            });
-        } else if (!session && supabaseRead) {
-            // Ensure read client is purged when primary client signs out
-            await supabaseRead.auth.signOut();
-        }
-    });
-
-    // Bind AppState auto-refresh to the new primary client instance
+    // AppState listener for auto-refresh management
     const appStateSubscription = bindAppStateAutoRefresh(supabase);
 
-    // Cleanup function to prevent memory leaks during property switches
+    // Explicit Cleanup Function to prevent memory leaks on client teardown
     const cleanupListeners = () => {
         subscription.unsubscribe();
         appStateSubscription.remove();
@@ -110,7 +125,7 @@ export function createDynamicSupabaseClient(
     return { supabase, supabaseRead, cleanupListeners };
 }
 
-// 4. AppState Listener for Auto-Refresh
+// 4. AppState Listener
 export function bindAppStateAutoRefresh(client: SupabaseClient) {
     return AppState.addEventListener('change', (state: AppStateStatus) => {
         if (state === 'active') {
@@ -121,7 +136,7 @@ export function bindAppStateAutoRefresh(client: SupabaseClient) {
     });
 }
 
-// 5. Default Fallback Instances
+// 5. Default Instances
 const defaultClients = createDynamicSupabaseClient(
     defaultUrl,
     defaultAnonKey,
@@ -130,3 +145,4 @@ const defaultClients = createDynamicSupabaseClient(
 
 export const supabase = defaultClients.supabase;
 export const supabaseRead = defaultClients.supabaseRead;
+export const cleanupDefaultListeners = defaultClients.cleanupListeners;

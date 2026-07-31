@@ -11,7 +11,10 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { createDynamicSupabaseClient } from "../libs/supabase";
+import {
+  cleanupDefaultListeners,
+  createDynamicSupabaseClient,
+} from "../libs/supabase";
 import {
   PropertyConfig,
   clearPropertyConfig,
@@ -204,6 +207,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         if (saved?.supabaseUrl && apiKey && isMounted) {
           setConfig(saved);
 
+          // 2. Shut down default module listeners before starting the dynamic client
+          cleanupDefaultListeners();
+
           // 🚀 FIX 2: Capture cleanupListeners from createDynamicSupabaseClient
           const {
             supabase: primaryClient,
@@ -275,6 +281,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
       setUser(null);
       setUserRole(null);
       cleanupListeners();
+      // Ensure default module listeners are also cleaned up if not done already
+      cleanupDefaultListeners();
 
       await Promise.all([
         SecureStore.deleteItemAsync("vitafit_member_session"),

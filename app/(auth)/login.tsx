@@ -150,17 +150,35 @@ export default function LoginScreen() {
       // PATH 1: STAFF AUTHENTICATION (app_users)   //
       // ========================================== //
       console.log("2. Attempting Supabase Auth Sign In...");
-      const { data: authData, error: authError } =
-        await supabase.auth.signInWithPassword({
-          email: sanitizedEmail,
-          password: secretKeyInput,
-        });
+      const authPromise = supabase.auth.signInWithPassword({
+        email: sanitizedEmail,
+        password: secretKeyInput,
+      });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                "Auth request timed out. Check network or DB URL configuration.",
+              ),
+            ),
+          5000,
+        ),
+      );
+
+      const { data: authData, error: authError } = (await Promise.race([
+        authPromise,
+        timeoutPromise,
+      ])) as Awaited<ReturnType<typeof supabase.auth.signInWithPassword>>;
 
       if (authError) {
         console.log(
-          "Staff Auth Error (expected if client):",
-          authError.message,
+          "❌ Auth Error Object:",
+          JSON.stringify(authError, null, 2),
         );
+      } else {
+        console.log("✅ Auth Success Data:", authData);
       }
 
       if (!authError && authData.user) {
@@ -174,10 +192,13 @@ export default function LoginScreen() {
         console.log("4. Refetching session...");
 
         if (staffUser && staffUser.status === "inactive") {
+          await supabase.auth.signOut();
           Toast.show({
             type: "error",
             text1: "Access Denied",
-            text2: "Your staff account is currently inactive.",
+            text2: !staffUser
+              ? "Staff profile record not found."
+              : "Your staff account is currently inactive.",
           });
           setLoading(false);
           return;
@@ -204,7 +225,7 @@ export default function LoginScreen() {
         .from("members")
         .select("id, email, member_code, status, full_name, outlet_id, tier")
         .eq("email", sanitizedEmail)
-        .eq("member_code", secretKeyInput.toUpperCase())
+        .ilike("member_code", secretKeyInput)
         .maybeSingle();
 
       if (memberError) {
