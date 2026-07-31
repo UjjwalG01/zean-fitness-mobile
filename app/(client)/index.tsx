@@ -1,15 +1,9 @@
 // app/(client)/index.tsx
 import BiometricSetup from "@/components/BiometricSetup";
-import { supabaseRead } from "@/libs/supabase";
+import { HeaderLogoutButton } from "@/components/HeaderLogoutButton";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import {
-  LogOut,
-  MailIcon,
-  ShieldCheck,
-  Sparkles,
-  User,
-} from "lucide-react-native";
+import { MailIcon, ShieldCheck, Sparkles, User } from "lucide-react-native";
 import React from "react";
 import {
   ActivityIndicator,
@@ -21,19 +15,25 @@ import {
   View,
 } from "react-native";
 import QRCode from "react-native-qrcode-svg";
-import { useAuth } from "../../hooks/useAuth";
+import { useDatabase } from "../../contexts/DatabaseContext";
 
 export default function ClientDashboard() {
   // 🚀 FIX 1: Use unified logout helper directly from useAuth hook
-  const { user, logout } = useAuth();
+  const { user, supabaseRead, supabase, userRole } = useDatabase();
   const router = useRouter();
+
+  const client = supabaseRead || supabase;
 
   // 🚀 FIX 2: Fetch fresh profile, but allow soft fallback to local session state
   const { data: remoteMember, isLoading } = useQuery({
     queryKey: ["client-profile", user?.id || user?.email],
     enabled: !!(user?.id || user?.email),
     queryFn: async () => {
-      const query = supabaseRead
+      console.log("Fetching member profile for:", user?.id || user?.email);
+
+      if (!client) throw new Error("No active database client found.");
+
+      const query = client
         .from("members")
         .select("id, full_name, email, tier, status, member_code, role");
 
@@ -44,8 +44,11 @@ export default function ClientDashboard() {
             .eq("email", user?.email?.toLowerCase().trim())
             .maybeSingle();
 
-      if (error) throw error;
-      console.log(data);
+      if (error) {
+        console.error("Supabase fetch member error:", error);
+        throw error;
+      }
+      console.log("Member data: ", data);
       return data;
     },
     retry: 1, // Minimize unnecessary network retries if offline or blocked by RLS
@@ -55,7 +58,7 @@ export default function ClientDashboard() {
   const member = remoteMember || {
     id: user?.id || "",
     email: user?.email || "No email registered",
-    full_name: user?.full_name || "Valued Member",
+    full_name: (user as any)?.full_name || "Valued Member",
     member_code: (user as any)?.member_code || "---",
     tier: (user as any)?.tier || "Basic Tier",
     status: (user as any)?.status || "Active",
@@ -170,7 +173,7 @@ export default function ClientDashboard() {
       {/* My Activity Page */}
       <View style={styles.actionBtn}>
         <TouchableOpacity
-          style={styles.logoutButton}
+          style={styles.activityBtn}
           onPress={() => router.push("/(client)/activities")} // 👈 Replace with your actual file path in app/
         >
           <Text style={styles.actionText}>My Activity</Text>
@@ -180,11 +183,8 @@ export default function ClientDashboard() {
       {/* Biometric Setup Integration */}
       <BiometricSetup currentUserEmail={member.email || user?.email || ""} />
 
-      {/* 🚀 FIX 3: Central Interactive Logout Button executes unified logout */}
-      <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-        <LogOut size={16} color="#ef4444" />
-        <Text style={styles.logoutText}>Terminate Session (Sign Out)</Text>
-      </TouchableOpacity>
+      {/* Logout button here */}
+      <HeaderLogoutButton />
     </ScrollView>
   );
 }
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
   },
   detailLabel: { color: "#6b7280", fontSize: 14, flex: 1 },
   detailValue: { color: "#ffffff", fontSize: 14, fontWeight: "500" },
-  logoutButton: {
+  activityBtn: {
     flexDirection: "row",
     backgroundColor: "#1f2937",
     padding: 14,
@@ -318,5 +318,4 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#374151",
   },
-  logoutText: { color: "#ef4444", fontWeight: "bold", fontSize: 14 },
 });

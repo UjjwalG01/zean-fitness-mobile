@@ -1,7 +1,6 @@
 // hooks/useMemberBookings.ts
 import { useDatabase } from "@/contexts/DatabaseContext";
 import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "./useAuth";
 
 export interface BookingActivity {
     id: string;
@@ -15,29 +14,31 @@ export interface BookingActivity {
 }
 
 export function useMemberBookings(activeTab: "upcoming" | "past") {
-    const { user, loading: authLoading } = useAuth();
-    const { supabaseRead } = useDatabase();
+    // 🚀 FIX: Get user and dynamic Supabase client directly from DatabaseContext
+    const { user, supabaseRead, supabase, isLoading: dbLoading } = useDatabase();
+
+    const client = supabaseRead || supabase;
 
     return useQuery({
         queryKey: ["member-bookings", user?.id, activeTab],
-        enabled: !!user?.id && !authLoading && !!supabaseRead,
+        enabled: Boolean(user?.id) && Boolean(client) && !dbLoading,
         queryFn: async () => {
             const targetMemberId = user?.id;
-            if (!targetMemberId || !supabaseRead) return [];
+            if (!targetMemberId || !client) return [];
 
-            let query = supabaseRead
+            let query = client
                 .from("bookings")
                 .select(
                     `
-                    id,
-                    created_at,
-                    start_at,
-                    status,
-                    service_name,
-                    service_type,
-                    class_name,
-                    rate
-                    `
+          id,
+          created_at,
+          start_at,
+          status,
+          service_name,
+          service_type,
+          class_name,
+          rate
+          `
                 )
                 .eq("member_id", targetMemberId);
 

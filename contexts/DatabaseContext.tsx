@@ -11,10 +11,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import {
-  bindAppStateAutoRefresh,
-  createDynamicSupabaseClient,
-} from "../libs/supabase";
+import { createDynamicSupabaseClient } from "../libs/supabase";
 import {
   PropertyConfig,
   clearPropertyConfig,
@@ -35,7 +32,8 @@ interface DatabaseContextType {
   resetProperty: () => Promise<void>;
   logout: () => Promise<void>;
   refreshAuth: () => Promise<void>;
-  setMemberSession: (memberData: any) => Promise<void>;
+  setMemberSession: (memberData?: any) => Promise<void>;
+  clearMemberSession: () => Promise<void>;
 }
 
 const DatabaseContext = createContext<DatabaseContextType | undefined>(
@@ -54,16 +52,16 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isLoading, setIsLoading] = useState(true);
 
   const authSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
-  const appStateSubRef = useRef<{ remove: () => void } | null>(null);
+  const dynamicClientCleanupRef = useRef<(() => void) | null>(null);
 
   const cleanupListeners = () => {
     if (authSubscriptionRef.current) {
       authSubscriptionRef.current.unsubscribe();
       authSubscriptionRef.current = null;
     }
-    if (appStateSubRef.current) {
-      appStateSubRef.current.remove();
-      appStateSubRef.current = null;
+    if (dynamicClientCleanupRef.current) {
+      dynamicClientCleanupRef.current();
+      dynamicClientCleanupRef.current = null;
     }
   };
 
@@ -96,17 +94,20 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const bindClientListeners = (client: SupabaseClient) => {
-    cleanupListeners();
-    appStateSubRef.current = bindAppStateAutoRefresh(client);
+    if (authSubscriptionRef.current) {
+      authSubscriptionRef.current.unsubscribe();
+      authSubscriptionRef.current = null;
+    }
 
     const { data: authListener } = client.auth.onAuthStateChange(
       async (event, session) => {
         if (session?.user) {
-          setUser(session.user);
           const determinedRole = await verifyStaffRole(
             client,
             session.user.email,
           );
+          // 🚀 FIX 3: Batch update state to prevent transient null-role redirects
+          setUser(session.user);
           setUserRole(determinedRole);
         } else if (event === "SIGNED_OUT") {
           const localMemberJson = await SecureStore.getItemAsync(
@@ -131,11 +132,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
       } = await client.auth.getSession();
 
       if (session?.user) {
-        setUser(session.user);
         const determinedRole = await verifyStaffRole(
           client,
           session.user.email,
         );
+        setUser(session.user);
         setUserRole(determinedRole);
         return;
       }
@@ -200,37 +201,42 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         const apiKey =
           saved?.supabasePublishableKey || (saved as any)?.supabaseAnonKey;
 
-        if (saved?.supabaseUrl && apiKey) {
-          if (!isMounted) return;
-
+        if (saved?.supabaseUrl && apiKey && isMounted) {
           setConfig(saved);
 
-          const { supabase: primaryClient, supabaseRead: readClient } =
-            createDynamicSupabaseClient(saved.supabaseUrl, apiKey);
+          // 🚀 FIX 2: Capture cleanupListeners from createDynamicSupabaseClient
+          const {
+            supabase: primaryClient,
+            supabaseRead: readClient,
+            cleanupListeners: clientCleanup,
+          } = createDynamicSupabaseClient(saved.supabaseUrl, apiKey);
 
+          dynamicClientCleanupRef.current = clientCleanup;
           setSupabase(primaryClient);
           setSupabaseRead(readClient);
 
           bindClientListeners(primaryClient);
 
-          try {
-            await checkSession(primaryClient);
-          } catch (sessionErr) {
-            console.warn(
-              "⚠️ Session check failed gracefully during startup:",
-              sessionErr,
-            );
-          }
-        } else {
-          if (isMounted) {
-            setConfig(null);
-            setSupabase(null);
-            setSupabaseRead(null);
-          }
+          // 🚀 FIX 1: UNBLOCK UI THREAD IMMEDIATELY!
+          // Set isLoading = false as soon as property config is verified.
+          setIsLoading(false);
+
+          // Run network session verification asynchronously in the background
+          checkSession(primaryClient).catch((sessionErr) => {
+            console.warn("Background session check error:", sessionErr);
+          });
+
+          return;
+        }
+
+        if (isMounted) {
+          setConfig(null);
+          setSupabase(null);
+          setSupabaseRead(null);
+          setIsLoading(false);
         }
       } catch (err) {
         console.error("❌ Failed loading DB config:", err);
-      } finally {
         if (isMounted) {
           setIsLoading(false);
         }
@@ -247,7 +253,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const logout = async () => {
     setIsLoading(true);
-    queryClient.clear(); // 💥 Purge cached queries
+    queryClient.clear();
 
     if (supabase) {
       try {
@@ -264,35 +270,30 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const setupProperty = async (newConfig: PropertyConfig) => {
     setIsLoading(true);
-    
+
     try {
-      // 🚀 FIX 1: Purge old session state AND local member storage FIRST (order matters)
       setUser(null);
       setUserRole(null);
       cleanupListeners();
-      
-      // 🚀 FIX 2: Delete ALL secure storage keys atomically BEFORE clearing query cache
+
       await Promise.all([
         SecureStore.deleteItemAsync("vitafit_member_session"),
         SecureStore.deleteItemAsync("biometrics_enabled"),
         SecureStore.deleteItemAsync("biometric_email"),
         SecureStore.deleteItemAsync("biometric_secret"),
       ]);
-      
-      // 🚀 FIX 3: Cancel all ongoing queries to prevent stale data writes, THEN clear
+
       queryClient.cancelQueries();
       queryClient.clear();
 
-      // 🚀 FIX 4: Sign out from old Supabase client before disposal
-      try {
-        if (supabase) {
+      if (supabase) {
+        try {
           await supabase.auth.signOut();
+        } catch (e) {
+          console.warn("Cleaned old auth state:", e);
         }
-      } catch (e) {
-        console.warn("Cleaned old auth state:", e);
       }
 
-      // 5. Persist newly scanned config to storage
       await savePropertyConfig(newConfig);
       setConfig(newConfig);
 
@@ -305,22 +306,20 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         );
       }
 
-      // 6. Create fresh client instances
-      const { supabase: primaryClient, supabaseRead: readClient } =
-        createDynamicSupabaseClient(newConfig.supabaseUrl, apiKey);
+      const {
+        supabase: primaryClient,
+        supabaseRead: readClient,
+        cleanupListeners: clientCleanup,
+      } = createDynamicSupabaseClient(newConfig.supabaseUrl, apiKey);
 
+      dynamicClientCleanupRef.current = clientCleanup;
       setSupabase(primaryClient);
       setSupabaseRead(readClient);
 
-      // 7. Bind listeners to the new primary client
       bindClientListeners(primaryClient);
 
-      // 8. Session check protected with timeout guard - but DO NOT auto-login
-      // After property switch, we ALWAYS want user to log in fresh
-      // So we explicitly skip session restoration and ensure clean state
       setUser(null);
       setUserRole(null);
-      
     } catch (err) {
       console.error("❌ Failed to setup property:", err);
       throw err;
@@ -331,37 +330,27 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const resetProperty = async () => {
     setIsLoading(true);
-    
-    // 🚀 FIX: Atomic purge sequence - order matters for complete cleanup
+
     try {
-      // 1. Cancel all pending queries first to prevent stale writes
       queryClient.cancelQueries();
-      
-      // 2. Clear query cache completely
       queryClient.clear();
-      
-      // 3. Cleanup all listeners
       cleanupListeners();
-      
-      // 4. Delete ALL secure storage keys atomically
+
       await Promise.all([
         SecureStore.deleteItemAsync("vitafit_member_session"),
         SecureStore.deleteItemAsync("biometrics_enabled"),
         SecureStore.deleteItemAsync("biometric_email"),
         SecureStore.deleteItemAsync("biometric_secret"),
       ]);
-      
-      // 5. Sign out from Supabase
+
       if (supabase) {
         try {
           await supabase.auth.signOut();
         } catch {}
       }
-      
-      // 6. Clear config storage
+
       await clearPropertyConfig();
-      
-      // 7. Reset React state
+
       setConfig(null);
       setSupabase(null);
       setSupabaseRead(null);
@@ -380,14 +369,53 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   };
 
-  // Helper for Member Login Screen to save session and force React Router update
+  // 1. LOGIN: Saves token, sets user state, triggers post-login checks
   const setMemberSession = async (memberData: any) => {
+    if (!memberData) return;
+
     await SecureStore.setItemAsync(
       "vitafit_member_session",
       JSON.stringify(memberData),
     );
+
+    if (memberData?.id || memberData?.token) {
+      let subId = memberData.id;
+      if (memberData.token) {
+        try {
+          const decoded: { sub?: string } = jwtDecode(memberData.token);
+          subId = decoded.sub || subId;
+        } catch {}
+      }
+
+      setUser({
+        id: subId,
+        email: memberData.email,
+        full_name: memberData.full_name,
+      } as AuthUser);
+      setUserRole("client");
+    }
+
     if (supabase) {
-      await checkSession(supabase);
+      checkSession(supabase).catch(() => {});
+    }
+  };
+
+  // 2. LOGOUT: Clears storage & user state immediately (NO checkSession calls)
+  const clearMemberSession = async () => {
+    try {
+      // Delete session key from storage
+      await SecureStore.deleteItemAsync("vitafit_member_session");
+
+      // Immediately clear React state so AppGuardLayout routes to /(auth)/login
+      setUser(null);
+      setUserRole(null);
+
+      // Unauthenticate local Supabase staff session if present
+      if (supabase) {
+        await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+      }
+    } catch (error) {
+      console.error("Failed to clear member session:", error);
     }
   };
 
@@ -405,6 +433,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({
         logout,
         refreshAuth,
         setMemberSession,
+        clearMemberSession,
       }}
     >
       {children}

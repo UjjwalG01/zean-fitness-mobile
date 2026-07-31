@@ -1,6 +1,6 @@
-// app/_layout.tsx
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
+import * as Updates from "expo-updates";
 import React, { useEffect } from "react";
 import {
   ActivityIndicator,
@@ -20,25 +20,37 @@ import { OutletProvider } from "../contexts/OutletContext";
 const queryClient = new QueryClient();
 
 function AppGuardLayout() {
-  // 1. Single Source of Truth from DatabaseContext
   const {
     config,
     supabase,
     user: dbUser,
     userRole: dbUserRole,
-    isLoading, // Handles both DB initialization and session check
+    isLoading,
   } = useDatabase();
 
   const segments = useSegments();
   const router = useRouter();
 
-  const activeUser = dbUser;
   const isConfigured = Boolean(config && supabase);
-  const isAuthenticated = Boolean(activeUser);
+  const isAuthenticated = Boolean(dbUser);
+
+  // Compute staff status safely
+  const isCustomMember = Boolean((dbUser as any)?.isCustomMember);
+  const effectiveRole = String(dbUserRole || "")
+    .trim()
+    .toLowerCase();
+
+  // 🚀 FIX 1: Explicitly check that role is resolved before classifying as non-staff
+  const isRoleResolved = dbUserRole !== undefined && dbUserRole !== null;
+  const isStaff =
+    !isCustomMember &&
+    ["admin", "manager", "staff", "superadmin", "owner"].includes(
+      effectiveRole,
+    );
 
   useEffect(() => {
-    // ✋ DO NOT REDIRECT while initial DB or Session checks are active
-    if (isLoading) return;
+    // ✋ Block navigation until DB, Session, and User Role are fully resolved
+    if (isLoading || (isAuthenticated && !isRoleResolved)) return;
 
     const currentSegment = segments[0] as string | undefined;
     const inSetupGroup = currentSegment === "setup";
@@ -62,58 +74,28 @@ function AppGuardLayout() {
       return;
     }
 
-    // Determine staff status safely
-    const isCustomMember = Boolean((activeUser as any)?.isCustomMember);
-    const effectiveRole = String(dbUserRole || "")
-      .trim()
-      .toLowerCase();
-    const isStaff =
-      !isCustomMember &&
-      (effectiveRole === "staff" ||
-        ["admin", "manager", "staff", "superadmin", "owner"].includes(
-          effectiveRole,
-        ));
-
     const targetDashboard = isStaff ? "/(staff)" : "/(client)";
 
-    // LAYER 3: Authenticated user on /setup screen -> Direct to Dashboard
-    if (inSetupGroup) {
+    // LAYER 3 & 4: Authenticated user on Setup, Auth, or Root path -> Send to appropriate Dashboard
+    if (inSetupGroup || inAuthGroup || !currentSegment) {
       router.replace(targetDashboard);
       return;
     }
 
-    // LAYER 4: Prevent authenticated users from staying on Login screens
-    if (inAuthGroup) {
-      router.replace(targetDashboard);
-      return;
-    }
-
-    // LAYER 5: Root path catch "/"
-    if (!currentSegment) {
-      router.replace(targetDashboard);
-      return;
-    }
-
-    // 🚀 FIX LAYER 6: Add explicit guard to prevent redundant cross-boundary redirects
-    // Only redirect if user is actually on the WRONG dashboard
+    // 🚀 FIX 2: Clean cross-boundary routing without redundant nested condition checks
     if (isStaff && inClientGroup) {
-      // Verify they're not already being redirected
-      if (segments.length <= 1 || segments[1] !== "index") {
-        router.replace("/(staff)");
-      }
+      router.replace("/(staff)");
     } else if (!isStaff && inStaffGroup) {
-      if (segments.length <= 1 || segments[1] !== "index") {
-        router.replace("/(client)");
-      }
+      router.replace("/(client)");
     }
   }, [
+    isLoading,
     isConfigured,
     isAuthenticated,
-    activeUser,
-    dbUserRole,
-    isLoading,
-    segments,
-    router, // 🚀 FIX: Add router to dependencies for stability
+    isRoleResolved,
+    isStaff,
+    // Joined string key avoids unnecessary effect triggers on array reference changes
+    segments.join("/"),
   ]);
 
   if (isLoading) {
@@ -124,7 +106,20 @@ function AppGuardLayout() {
           title="Clear Saved Property Data"
           onPress={async () => {
             await clearPropertyConfig();
-            Alert.alert("Cleared", "App storage cleared. Restarting app...");
+            Alert.alert("Cleared", "App storage cleared. Reloading app...", [
+              {
+                text: "OK",
+                onPress: async () => {
+                  try {
+                    // 🚀 FIX 4: Hard reload app after clearing config
+                    await Updates.reloadAsync();
+                  } catch {
+                    // Fallback to setup navigation if updates SDK isn't available in dev
+                    router.replace("/setup");
+                  }
+                },
+              },
+            ]);
           }}
         />
         <Text style={styles.text}>Establishing Secure Link...</Text>
@@ -135,6 +130,7 @@ function AppGuardLayout() {
   return (
     <View style={{ flex: 1, backgroundColor: "#030712" }}>
       <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" />
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(staff)" />
         <Stack.Screen name="(client)" />

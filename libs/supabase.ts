@@ -49,7 +49,11 @@ export function createDynamicSupabaseClient(
     url: string = defaultUrl,
     anonKey: string = defaultAnonKey,
     readReplicaUrl?: string
-): { supabase: SupabaseClient; supabaseRead: SupabaseClient } {
+): {
+    supabase: SupabaseClient;
+    supabaseRead: SupabaseClient;
+    cleanupListeners: () => void
+} {
     const primaryUrl = url;
     const replicaUrl = readReplicaUrl || primaryUrl;
 
@@ -64,17 +68,15 @@ export function createDynamicSupabaseClient(
 
     const supabaseRead = createClient(replicaUrl, anonKey, {
         auth: {
-            // 🚀 CRITICAL FIX: Must persist session to attach Authorization headers to GET requests
-            storage: MobileSecureStoreAdapter, // Use same secure storage adapter
-            persistSession: true, 
-            autoRefreshToken: false, // Read client doesn't need to refresh tokens, primary does
+            // In-memory session only to avoid SecureStore write collisions with primary client
+            persistSession: false,
+            autoRefreshToken: false,
             detectSessionInUrl: false,
         },
     });
 
-    // 🚀 CRITICAL FIX: Immediately sync the current session from Primary -> Read Client
-    // This ensures that if a user is already logged in, the read client inherits the token instantly
-    supabase.auth.getSession().then(({  { session } }) => {
+    // Sync session from Primary -> Read Client immediately on creation
+    supabase.auth.getSession().then(({ data: { session } }) => {
         if (session && supabaseRead) {
             supabaseRead.auth.setSession({
                 access_token: session.access_token,
@@ -83,30 +85,32 @@ export function createDynamicSupabaseClient(
         }
     });
 
-    // Optional: Listen for future token changes to keep them in sync
-    supabase.auth.onAuthStateChange(async (event, session) => {
+    // Listen for future token changes & handle logout sync cleanly
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (session && supabaseRead) {
             await supabaseRead.auth.setSession({
                 access_token: session.access_token,
                 refresh_token: session.refresh_token,
             });
+        } else if (!session && supabaseRead) {
+            // Ensure read client is purged when primary client signs out
+            await supabaseRead.auth.signOut();
         }
     });
 
-    return { supabase, supabaseRead };
+    // Bind AppState auto-refresh to the new primary client instance
+    const appStateSubscription = bindAppStateAutoRefresh(supabase);
+
+    // Cleanup function to prevent memory leaks during property switches
+    const cleanupListeners = () => {
+        subscription.unsubscribe();
+        appStateSubscription.remove();
+    };
+
+    return { supabase, supabaseRead, cleanupListeners };
 }
 
-// 4. Default Fallback Instances
-const defaultClients = createDynamicSupabaseClient(
-    defaultUrl,
-    defaultAnonKey,
-    defaultReadUrl
-);
-
-export const supabase = defaultClients.supabase;
-export const supabaseRead = defaultClients.supabaseRead;
-
-// 5. AppState Listener for Auto-Refresh
+// 4. AppState Listener for Auto-Refresh
 export function bindAppStateAutoRefresh(client: SupabaseClient) {
     return AppState.addEventListener('change', (state: AppStateStatus) => {
         if (state === 'active') {
@@ -117,5 +121,12 @@ export function bindAppStateAutoRefresh(client: SupabaseClient) {
     });
 }
 
-// Bind for the fallback instance
-bindAppStateAutoRefresh(supabase);
+// 5. Default Fallback Instances
+const defaultClients = createDynamicSupabaseClient(
+    defaultUrl,
+    defaultAnonKey,
+    defaultReadUrl
+);
+
+export const supabase = defaultClients.supabase;
+export const supabaseRead = defaultClients.supabaseRead;

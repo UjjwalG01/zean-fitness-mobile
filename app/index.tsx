@@ -1,6 +1,4 @@
 // app/index.tsx
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { useDatabase } from "../contexts/DatabaseContext";
 

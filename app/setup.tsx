@@ -2,7 +2,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
-import * as SecureStore from "expo-secure-store";
 import React, { useState } from "react";
 import { Alert, Button, StyleSheet, Text, View } from "react-native";
 
@@ -41,7 +40,7 @@ export default function SetupScreen() {
       // 🚀 FIX: Delegate ALL clearing logic to setupProperty to avoid race conditions
       // Remove local queryClient.clear() and SecureStore.deleteItemAsync() calls here
       // The setupProperty function in DatabaseContext handles everything atomically
-      
+
       // 3. Re-initialize Supabase client with new property credentials
       await setupProperty(payload);
 
@@ -55,8 +54,10 @@ export default function SetupScreen() {
             {
               text: "Continue to Login",
               onPress: () => {
-                // 🚀 FIX: Dismiss all stacked routes and replace with login
-                router.dismissAll();
+                // ✅ SAFELY checks if there are screens to dismiss first
+                if (router.canGoBack()) {
+                  router.dismissAll();
+                }
                 router.replace("/(auth)/login");
               },
             },

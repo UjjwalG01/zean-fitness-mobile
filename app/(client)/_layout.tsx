@@ -1,7 +1,6 @@
 // app/(client)/_layout.tsx
 import { Stack } from "expo-router";
 import React from "react";
-import { HeaderLogoutButton } from "../../components/HeaderLogoutButton";
 
 export default function ClientLayout() {
   return (
@@ -17,9 +16,6 @@ export default function ClientLayout() {
 
         // Flat UI styling
         headerShadowVisible: false,
-
-        // 🚀 FIX 1: Pass component reference directly to prevent header re-render flickers
-        headerRight: HeaderLogoutButton,
       }}
     >
       {/* Profile Dashboard (app/(client)/index.tsx) */}

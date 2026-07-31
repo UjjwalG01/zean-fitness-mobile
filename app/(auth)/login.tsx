@@ -199,6 +199,7 @@ export default function LoginScreen() {
       // ==========================================
       // PATH 2: CLIENT / MEMBER AUTHENTICATION (members)
       // ==========================================
+      console.log("3b. Checking member database records...");
       const { data: member, error: memberError } = await readClient
         .from("members")
         .select("id, email, member_code, status, full_name, outlet_id, tier")
@@ -221,35 +222,79 @@ export default function LoginScreen() {
           return;
         }
 
-        // Call Supabase Edge Function to generate custom JWT
-        const { data: jwtResponse, error: jwtError } =
-          await readClient.functions.invoke("create-member-jwt", {
-            body: { memberId: member.id, email: member.email },
-          });
+        console.log("4b. Member verified. Requesting custom JWT token...");
 
-        if (jwtError || !jwtResponse?.token) {
+        // Extract credentials from property config
+        const supabaseUrl = config?.supabaseUrl;
+        const apiKey =
+          config?.supabasePublishableKey || (config as any)?.supabaseAnonKey;
+
+        if (!supabaseUrl || !apiKey) {
           throw new Error(
-            "Failed to issue security token: " +
-              (jwtError?.message || "Unknown error"),
+            "Property configuration is missing Supabase credentials.",
           );
         }
 
-        const token = jwtResponse.token;
+        // 🚀 FAIL-SAFE: 12-second timeout controller so app NEVER hangs forever
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-        // Store member session and sync with DatabaseContext
-        await setMemberSession({ ...member, token });
+        try {
+          const functionUrl = `${supabaseUrl}/functions/v1/create-member-jwt`;
 
-        if (refetchSession) await refetchSession();
+          const response = await fetch(functionUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              apikey: apiKey,
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              memberId: member.id,
+              email: member.email,
+            }),
+            signal: controller.signal,
+          });
 
-        Toast.show({
-          type: "success",
-          text1: "Client Portal Access",
-          text2: `Welcome back, ${member.full_name || "Member"}!`,
-        });
+          clearTimeout(timeoutId);
 
-        // REDIRECT TO CLIENT DASHBOARD
-        router.replace("/(client)");
-        return;
+          const resData = await response.json();
+          console.log("4c. Edge Function Response Status:", response.status);
+          console.log("4d. Edge Function Response Data:", resData);
+
+          if (!response.ok || !resData?.token) {
+            throw new Error(
+              resData?.error ||
+                resData?.message ||
+                `Function failed with status ${response.status}`,
+            );
+          }
+
+          const token = resData.token;
+
+          // Store member session and sync with DatabaseContext
+          await setMemberSession({ ...member, token });
+
+          if (refetchSession) await refetchSession();
+
+          Toast.show({
+            type: "success",
+            text1: "Client Portal Access",
+            text2: `Welcome back, ${member.full_name || "Member"}!`,
+          });
+
+          // REDIRECT TO CLIENT DASHBOARD
+          router.replace("/(client)");
+          return;
+        } catch (fetchErr: any) {
+          clearTimeout(timeoutId);
+          if (fetchErr.name === "AbortError") {
+            throw new Error(
+              "Edge function request timed out after 12s. Please check server logs.",
+            );
+          }
+          throw fetchErr;
+        }
       }
 
       // If neither staff nor member credentials match
